@@ -1,0 +1,584 @@
+---
+title: "Human Visium Kidney Pipeline"
+output: html_notebook
+---
+
+# Set some user parameters
+
+```{r}
+sampleID <- "assayID" #a name for your sample, should be the same as the "assay = assayID" in the box below
+outdir <- "/path/to/outdir/" #where to store the output
+datadir <- "/path/to/datadir/" #must contain filtered_feature_bc_matrix.h5 folder
+```
+
+# load the data
+
+```{r}
+library(Seurat)
+df <- Load10X_Spatial(datadir, filename = "filtered_feature_bc_matrix.h5", assay = "assayID")
+# Note: this will cause the nCount and nFeature metadata columns to be called "nCount_assayID" - you will need to change this below (do a cntl+f for "assayID")
+```
+
+# Load additional R packages and functions that we will run below
+
+```{r message=FALSE, warning=FALSE}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(clustree)
+library(scran)
+library(scater)
+library(PCAtools)
+library(tibble)
+library(SingleCellExperiment)
+
+to.pdf <- function(expr, filename, ...) {
+  pdf(filename, ...)
+  on.exit(dev.off())
+  print(eval.parent(substitute(expr)))
+}
+
+# function to remove cells with high mitochondrial/ribosomal percentages
+func_assessMT.RT <- function(seuratObj, sampleID) {
+  # USAGE: mySCE <- func_assessMT.RT(seuratObj, sampleID)
+  # find percentage of mt/rb genes per cell
+  # Human-specific. For mouse, change to "^mt-" (mitochondria) or "^Rps|^Rpl" (ribosomes)
+  seuratObj[["percent.mt"]] <- PercentageFeatureSet(seuratObj, pattern = "^MT-")
+  seuratObj[["percent.rb"]] <- PercentageFeatureSet(seuratObj, pattern = "^RPS|^RPL")
+  
+  # define some graph functions which will be run with `to.pdf` later
+  ## spatial map of mitochondrial expression
+  fig.mitochondrialPercentage.spatial <- function() {
+    SpatialFeaturePlot(seuratObj, features = "percent.mt") +
+      ggtitle(paste0(sampleID, " - percentage mitochondrial genes per spot")) +
+      theme(legend.position = "right")
+  }
+  ## mitochondrial % only
+  fig.mitochondriaPercentage <- function() {
+    VlnPlot(seuratObj, features = c("percent.mt")) +
+      ggtitle(paste0(sampleID, " - percentage mitochondrial genes per cell")) +
+      ylab("% mitochondrial genes") +
+      geom_hline(yintercept = 20, linetype = "dashed", color = "blue") +
+      theme(plot.title = element_text(size = 12, face = "bold")) +
+      theme_bw() +
+      theme(legend.position = "none")
+  }
+  ## spatial map of ribosomal expression
+  fig.ribosomePercentage.spatial <- function() {
+    SpatialFeaturePlot(seuratObj, features = "percent.rb") +
+      ggtitle(paste0(sampleID, " - percentage ribosomal genes per spot")) +
+      theme(legend.position = "right")
+  }
+  ## ribosomal % only
+  fig.ribosomePercentage <- function() {
+    VlnPlot(seuratObj, features = c("percent.rb")) +
+      ggtitle(paste0(sampleID, " - percentage ribosomal genes per cell")) +
+      ylab("% ribosomal genes") +
+      geom_hline(yintercept = 50, linetype = "dashed", color = "blue") +
+      theme(plot.title = element_text(size = 12, face = "bold")) +
+      theme_bw() +
+      theme(legend.position = "none")
+  }
+  ## mitochondria % vs nFeatures
+  fig.mitochondriaVSfeatures <- function() {
+    basicplot <- FeatureScatter(seuratObj, feature1 = paste0("nFeature_", sampleID), feature2 = "percent.mt", pt.size = 0.5)
+    pearson <- basicplot$labels$title
+    basicplot +
+      ggtitle(paste0(sampleID, " - percentage mitochondrial genes vs number of genes per cell (pearson = ", pearson, ")")) +
+      ylab("% mitochondrial genes") +
+      xlab("number of genes") +
+      geom_hline(yintercept = c(10, 20), linetype="dashed", color = "blue") +
+      geom_vline(xintercept = c(3000), linetype="dashed", color = "blue") +
+      theme(plot.title = element_text(size = 12, face = "bold")) +
+      theme_bw() +
+      theme(legend.position = "none")
+  }
+  ## ribosomal % vs nFeatures
+  fig.ribosomeVSfeatures <- function() {
+    basicplot <- FeatureScatter(seuratObj, feature1 = paste0("nFeature_", sampleID), feature2 = "percent.rb", pt.size = 0.5)
+    pearson <- basicplot$labels$title
+    basicplot +
+      ggtitle(paste0(sampleID, " - percentage ribosomal genes vs number of genes per cell (pearson = ", pearson, ")")) +
+      ylab("% ribosomal genes") +
+      xlab("number of genes") +
+      geom_hline(yintercept = 50, linetype="dashed", color = "blue") +
+      geom_vline(xintercept = c(3000), linetype="dashed", color = "blue") +
+      theme(plot.title = element_text(size = 12, face = "bold")) +
+      theme_bw() +
+      theme(legend.position = "none")
+  }
+  
+  # Run the figure functions and save graphs as PDFs
+  ## if you just want to view the figures, just run the function name e.g. `fig.mitochondriaPercentage()`
+  to.pdf(fig.mitochondriaPercentage(), paste0(outdir, sampleID, "_percentMitochondria_unfiltered.pdf"))
+  to.pdf(fig.mitochondrialPercentage.spatial(), paste0(outdir, sampleID, "_percentMitochondriaSpatial_unfiltered.pdf"))
+  to.pdf(fig.ribosomePercentage(), paste0(outdir, sampleID, "_percentRibosome_unfiltered.pdf"))
+  to.pdf(fig.ribosomePercentage.spatial(), paste0(outdir, sampleID, "_percentRibosomeSpatial_unfiltered.pdf"))
+  to.pdf(fig.mitochondriaVSfeatures(), paste0(outdir, sampleID, "_percentMitochondriaVsnFeatures.pdf"))
+  to.pdf(fig.ribosomeVSfeatures(), paste0(outdir, sampleID, "_percentRibosomesVsnFeatures.pdf"))
+  
+  # subset input data to cells under mt/rb thresholds
+  # NOTE: Though the following command looks wrong (extra ,) but it works (`SingleCellExperiment` manual, function `SCE-combine`, p12)
+  seuratObj <- subset(seuratObj, subset = percent.mt < 50 & percent.rb < 50) 
+  # return mySCE to main R environment
+  return(seuratObj)
+}
+
+# ------------------------------------------------------------------
+# QC - CELL CYCLE
+# ------------------------------------------------------------------
+
+func_predictCellCycle <- function(seuratObj, myspecies="mouse"){
+  # USAGE: seuratObj <- func_predictCellCycle(seuratObj, "mouse")
+  # OUTPUT: a Seurat object with S/G2M-phase scores and cell stage (G1, S, G2M) calls
+  
+  # specify the gene set used for Cell Cycle Scoring (human or mouse)
+  if (identical(myspecies, "mouse")) {
+    load("/Users/uqlgrice/Documents/IMB/Research/LabBooks/20200106_BuildPipe/data/mouse.cc.genes.Rdata")
+    geneset <- mouse.cc.genes
+  } else if (identical(myspecies, "human")) {
+    geneset <- cc.genes.updated.2019
+  } else {
+    stop("The 'species' argument must be mouse or human")
+  }
+  
+  # make a Seurat object, normalise, run prediction
+  # note: we use Seurat's default normalisation tool for the cell phase assessment (quick and dirty). Later we will use Scran for the normal normalisation
+  seuratObj <- NormalizeData(seuratObj,
+                             normalization.method = "LogNormalize",
+                             scale.factor = 10000)
+  seuratObj <- CellCycleScoring(seuratObj,
+                                s.features = geneset$s.genes,
+                                g2m.features = geneset$g2m.genes,
+                                set.ident = TRUE)
+  
+  # define some graph functions which will be run with `to.pdf` later
+  fig.cellcycle.bar <- function() {
+    myscale <- round(max(table(seuratObj$Phase)), -3) #scale
+    mybar <- barplot(table(seuratObj$Phase),
+                     ylim = (c(0, myscale)),
+                     main = paste0("Cell Phases in ", sampleID),
+                     xlab = "cell phase",
+                     ylab = "# cells", 
+                     col = "white")
+    text(mybar,
+         table(seuratObj$Phase)+100,
+         paste("n: ", table(seuratObj$Phase), sep=""), cex = 1) 
+  }
+  
+  fig.cellcycle.pie <- function() {
+    pie(table(seuratObj$Phase),
+        labels = table(seuratObj$Phase),
+        col = c("bisque", "cornflowerblue", "cadetblue2"),
+        main = paste0("Cell phases in ", sampleID))
+    legend("topright", c("G1", "G2M", "S"), cex = 0.8, fill = c("bisque", "cornflowerblue", "cadetblue2"))
+  }
+  
+  # spatial plots
+  fig.cellcycle.spatial <- function() {
+    SpatialDimPlot(seuratObj, group.by = "Phase") +
+      theme(legend.position = "right")
+  }
+  
+  # Run the figure functions and save graphs as PDFs
+  to.pdf(fig.cellcycle.bar(), paste0(outdir, sampleID, "_CellCycle_bar.pdf"))
+  to.pdf(fig.cellcycle.pie(), paste0(outdir, sampleID, "_CellCycle_pie.pdf"))
+  to.pdf(fig.cellcycle.spatial(), paste0(outdir, sampleID, "_CellCycle_spatial.pdf"))
+    
+  # return the updated SCE
+  return(seuratObj)
+}
+
+# ------------------------------------------------------------------
+# NORMALISATION
+# ------------------------------------------------------------------
+
+# function to normalise count data in scran/scater
+func_scranNorm <- function(seuratObj) {
+  # USAGE: mySCE <- func_scranNorm(seuratObj)
+  # OUTPUT: a SCE object with (natural log) normalised counts - the counts need to be added into the Seurat object, but indirectly to keep the image data
+  # NOTE: usually, scran normalisation produces log2counts, but here we produce seurat-compatible lncounts
+  
+  # convert to SCE object
+  mySCE <- as.SingleCellExperiment(seuratObj)
+  # calculate size factors and perform normalisation
+  scranclusters <- quickCluster(mySCE)
+  mySCE <- computeSumFactors(mySCE, clusters = scranclusters)
+  # "scran sometimes calculates negative or zero size factors which will completely distort the normalized expression matrix". Let's check
+  minsizefactor <- min(sizeFactors(mySCE))
+  if (minsizefactor < 0) {
+    warning("ALERT! scran normalisation has produced negative or zero size factors which will distort the normalised expression matrix. Proceed with care!\n You can try increasing the cluster and pool sizes until they are all positive\n See https://biocellgen-public.svi.edu.au/mig_2019_scrnaseq-workshop/public/normalization-confounders-and-batch-correction.html")
+  }
+  mySCE <- scater::logNormCounts(mySCE, log = FALSE, name = "unlog.normcounts")
+  
+  # natural-log transform counts and convert back to sparse matrix format
+  assay(mySCE, "ln.normcounts") <- as(log(x = assay(mySCE, "unlog.normcounts") + 1), "dgCMatrix")
+  return(mySCE)
+  # NOTE: To convert to Seurat object from now on your must run:
+  # seuratObj <- as.Seurat(mySCE, counts = "counts", data = "ln.normcounts")
+}
+```
+
+```{r}
+func_ScaleData <- function(seuratObj) {
+  # USAGE: seuratObj <- func_ScaleData(mySCE)
+  # OUTPUT: a Seurat object with scaled normalised counts
+  # find variable features, perform scaling
+  seuratObj <- FindVariableFeatures(seuratObj, selection.method = "vst", nfeatures = 2000)
+  seuratObj <- ScaleData(seuratObj)
+  
+  # convert to SCE object
+  #mySCE <- as.SingleCellExperiment(seuratObj)
+  # alternatively, don't convert back fresh, just insert the scaledata as a new assay type
+  #return(mySCE)
+  
+  # for now, just return the Seurat object
+  return(seuratObj)
+}
+
+# ------------------------------------------------------------------
+# PCA
+# ------------------------------------------------------------------
+
+# function to find variable features and scale data using Seurat
+func_runPCA <- function(seuratObj, runJackstraw = "TRUE") {
+  # USAGE: seuratObj <- func_runPCA(seuratObj, runJackstraw = "TRUE" or "FALSE")
+  # OUTPUT: a Seurat object with PCA run
+  
+  # Run PCA
+  seuratObj <- RunPCA(seuratObj, features = VariableFeatures(object = seuratObj), npcs = 50)
+  
+  # calculate variance explained by each PC
+  total_variance <- seuratObj@reductions$pca@misc$total.variance
+  eigValues <- (seuratObj[["pca"]]@stdev)^2
+  varExplained <- eigValues / total_variance
+  varExplained.cum <- cumsum(varExplained)
+
+  ### how many PCs before 20 % of the variance is explained?
+  var.20pc <- sum(varExplained.cum <= 0.2)
+  ### how much variance do 50 PCs explain?
+  varpc.50PCA <- 100*(varExplained.cum[50])
+  print(paste0("The first 50 PCs explain ", round(varpc.50PCA), "% of the variance. 20% of the variance is explained by the first ", var.20pc, " PCs"))
+  
+  # define some graph functions which will be run with `to.pdf` later
+  ## scree plot
+  fig.scree <- function() {
+    varExplained %>% enframe(name = "PC", value = "varExplained" ) %>%
+      ggplot(aes(x = PC, y = varExplained)) + 
+      theme_bw() +
+      geom_bar(stat = "identity") +
+      theme_classic() +
+      ggtitle(paste0(sampleID, ": scree plot")) +
+      ylab("explained variance")
+  }
+  ## cumulative variance
+  fig.cumulativeVar <- function() {
+    ggplot(as.data.frame(varExplained.cum), aes(y = varExplained.cum, x = seq(1, length(varExplained.cum)))) +
+      geom_point(size = 1) +
+      theme_bw() +
+      ggtitle("cumulative variance explained by increasing PCs") +
+      xlab("PCs") +
+      ylab("cumulative explained variance") +
+      geom_hline(yintercept = c(0.2), linetype = "dashed", color = "blue") +
+      geom_vline(xintercept = c(20), linetype = "dashed", color = "blue")
+  }
+  
+  # Make an elbow plot with elbow point annotated (adapted from Seurat's ElbowPlot() but to show all tested PCs)
+  fig.elbow <- function() {
+    ElbowPlot(seuratObj, ndims = 50, reduction = "pca") +
+      theme_bw() +
+      ggtitle(paste0(sampleID, ": elbow plot of standard deviations of principal components"))
+  }
+  
+  # Perform JackStraw analysis
+  if (runJackstraw == "TRUE") {
+    seuratObj <- JackStraw(seuratObj, num.replicate = 100, dims = 50)
+    seuratObj <- ScoreJackStraw(seuratObj, dims = 1:50) # because `RunPCA` calculates 50x PCs by defalt (you can change this)
+    fig.jackstraw <- function() {
+      JackStrawPlot(seuratObj, dims = 1:50) +
+        ggtitle("PCA JackStraw")
+    }
+    # the PC p-vals are in seuratObj@reductions$pca@jackstraw$overall.p.values
+    # get the PC number of the last PC before one is not significant
+    jscores <- as.data.frame(seuratObj@reductions$pca@jackstraw$overall.p.values > 0.05)
+    chosen.jack <- as.numeric(rownames(jscores[jscores$Score == "TRUE", ][1,])) - 1
+    to.pdf(fig.jackstraw(), paste0(outdir, sampleID, "_PCA_jackstraw.pdf"))
+    } else {
+      if (runJackstraw == "FALSE") {
+      print("skipping Jackstraw analysis")
+    } else {
+      stop("runJackstraw must be TRUE or FALSE")
+    }
+  }
+  
+  # Run the figure functions and save graphs as PDFs
+  to.pdf(fig.scree(), paste0(outdir, sampleID, "_scree.pdf"))
+  to.pdf(fig.cumulativeVar(), paste0(outdir, sampleID, "_cumulativeVariance.pdf"))
+  to.pdf(fig.elbow(), paste0(outdir, sampleID, "_PCA_elbow.pdf"))
+  # to.pdf(fig.jackstraw(), paste0(outdir, "figs/", sampleID, "_PCA_jackstraw.pdf")) #run above in if/else bit
+
+  # for now, just return the Seurat object
+  return(seuratObj)
+}
+
+func_runNonLinearDR <- function(seuratObj, runTSNE = "TRUE") {
+  # USAGE: seuratObj <- func_runNonLinearDR(seuratObj, runTSNE = "TRUE" or "FALSE")
+  # OUTPUT: a Seurat object with tSNE and UMAP coordinates
+  
+  # Run UMAP
+  seuratObj <- Seurat::RunUMAP(seuratObj, dims = 1:50, n.neighbors = 5, min.dist = 0)
+  fig.umap.raw <- function() {
+    # alternative to DimPlot(seuratObj, reduction = "umap")
+    Embeddings(seuratObj, reduction = "umap") %>%
+      as.data.frame() %>%
+      ggplot(aes(x = UMAP_1, y = UMAP_2)) +
+      geom_point(size = 0.3) +
+      theme_bw(base_size = 14) +
+      ggtitle(paste0(sampleID, ": UMAP"))
+  }
+  to.pdf(fig.umap.raw(), paste0(outdir, sampleID, "_UMAP_raw.pdf"))
+  
+  # Run tSNE
+  if (runTSNE == "TRUE") {
+    seuratObj <- Seurat::RunTSNE(seuratObj, dims = 1:50)
+    
+    fig.tSNE.raw <- function() {
+      # alternative to DimPlot(seuratObj, reduction = "tSNE")
+      Embeddings(seuratObj, reduction = "tsne") %>%
+        as.data.frame() %>%
+        ggplot(aes(x = tSNE_1, y = tSNE_2)) +
+        geom_point(size = 0.3) +
+        theme_bw(base_size = 14) +
+        ggtitle(paste0(sampleID, ": tSNE"))
+    }
+    to.pdf(fig.tSNE.raw(), paste0(outdir, sampleID, "_tSNE_raw.pdf"))
+  } else {
+    if (runTSNE == "FALSE") {
+      print("skipping tSNE plot")
+    } else {
+      stop("runTSNE must be TRUE or FALSE")
+    }
+  }
+  return(seuratObj)
+}
+
+```
+
+# QC 1 - REMOVE LOW COUNTS
+
+```{r}
+# look at the number of features and cells
+df
+```
+
+Now we will look at QC plots. The `nFeature` measure shows us the number of genes per spot, while `nCount` refers to the number of RNA transcripts (i.e. total counts) per spot. We can either visualise these measures on their own as violin plots, or we can plot them together on a scatter plot, where we expect the trend to be roughly diagonal. If we see outliers from this diagonal, they are indicative of weird spots.
+
+```{r fig.width=12}
+# Look at some QC plots
+VlnPlot(df, features = c(paste0("nFeature_", sampleID), paste0("nCount_", sampleID)), group.by = "orig.ident")
+ggsave(paste0(outdir, sampleID, "_countsAndFeatures.pdf"))
+FeatureScatter(df, feature1 = paste0("nFeature_", sampleID), feature2 = paste0("nCount_", sampleID), group.by = "orig.ident") + NoLegend()
+ggsave(paste0(outdir, sampleID, "_scatter.pdf"))
+```
+
+Filter out spots with low counts and features (requires at least 100 counts and 100 feature per spot)
+
+```{r}
+df <- subset(df, subset = nCount_assayID > 100 & nFeature_assayID > 100)
+df
+```
+
+# QC 2 - MITOCHONDRIA AND RIBOSOMES
+
+Now we'll look for spots with excessively high percentages of ribosomal or mitochondrial genes, which may further indicate a quality problem. We're arbitrarily going to filter spots with >50% mitochondrial genes and/or >50% ribosomal genes. To see the "before filtering" plots, have a look at the accompanying plots directory.
+
+```{r}
+df <- func_assessMT.RT(df, sampleID)
+```
+
+```{r fig.width=8}
+# this is what the data look like, post-filtering
+SpatialFeaturePlot(df, features = "percent.mt") + theme(legend.position = "right")
+ggsave(paste0(outdir, sampleID, "_percentMitochondriaSpatial_filtered.pdf"))
+SpatialFeaturePlot(df, features = "percent.rb") + theme(legend.position = "right")
+ggsave(paste0(outdir, sampleID, "_percentRibosomeSpatial_filtered.pdf"))
+```
+
+And just check in on how many genes/cells remain in our dataset:
+
+```{r}
+df
+```
+
+# QC 3 - CELL CYCLE ANNOTATION
+
+Now we will do a cell cycle prediction. This method looks at certain marker genes associated with different phases of mitosis, and is described in a Seurat vignette. This prediction is typically used for single cell data, so it's possible it won't perform as well here with ST data. For more information about this analysis, see the [Seurat vignette](https://satijalab.org/seurat/v3.1/cell_cycle_vignette.html). However, unlike in the Seurat vignette, we aren't going to include this data in any regression steps - we are just interested in seeing the trends across our tissue.
+
+```{r}
+df <- func_predictCellCycle(df, "human")
+```
+
+Let's visualise the results. We'll grey out the G1-phase spots so we highlight those that are dividing.
+
+```{r fig.height=10, fig.width=10}
+SpatialDimPlot(df, group.by = "Phase") + theme(legend.position = "right") + scale_fill_manual(values = c("grey", "#F4A698", "#DD614A", "black"))
+ggsave(paste0(outdir, sampleID, "_CellCycle_spatialPretty.pdf"))
+```
+
+# NORMALISATION IN SCRAN
+
+Here we diverge from the Seurat pipeline to run Scran normalisation instead.
+
+```{r}
+df.sce <- func_scranNorm(df)
+df.temp <- as.Seurat(df.sce, counts = "counts", data = "ln.normcounts")
+df@assays$assayID@counts <- df.temp@assays$RNA@counts
+df@assays$assayID@data <- df.temp@assays$RNA@data
+```
+
+# LOOK AT KIDNEY MARKERS OF INTEREST
+
+Here we're going to look at some key kidney markers to see where they are showing up, and see if the tissue looks like what we'd expect.
+
+Change the code below to visualise other markers of interest
+
+```{r fig.height=7, fig.width=7}
+SpatialFeaturePlot(df, features = c("NPHS2"), alpha = c(0.1, 1)) + ggtitle("Podocin")
+```
+
+# RUN PCA AND UMAP
+
+```{r}
+df <- func_ScaleData(df)
+df <- func_runPCA(df, runJackstraw = "FALSE")
+df <- func_runNonLinearDR(df, runTSNE = "TRUE") # 50 dims
+df <- FindNeighbors(df, reduction = "pca", dims = 1:50)
+```
+
+```{r}
+DimPlot(df, reduction = "umap", group.by = "orig.ident")
+DimPlot(df, reduction = "tsne", group.by = "orig.ident")
+```
+
+# CLUSTER AND TEST WITH CLUSTREE
+
+Now we're going to cluster the cells. First, we'll make a temporary R object `df.2` and test a range of different resolution values. The resolution parameter "control[s] the size and structure of communities that are formed by optimizing a generalized objective function". Effectively, an increased resolution = more clusters - though you can't tell Seurat to give you exactly N clusters, and often different resolution values will give the same number of clusters.
+
+```{r include=FALSE}
+# I already ran findNeighbours above
+df.2 <- FindClusters(df, resolution = 0)
+df.2 <- FindClusters(df.2, resolution = 0.1)
+df.2 <- FindClusters(df.2, resolution = 0.2)
+df.2 <- FindClusters(df.2, resolution = 0.3)
+df.2 <- FindClusters(df.2, resolution = 0.4)
+df.2 <- FindClusters(df.2, resolution = 0.6)
+df.2 <- FindClusters(df.2, resolution = 0.8)
+df.2 <- FindClusters(df.2, resolution = 1)
+df.2 <- FindClusters(df.2, resolution = 1.2)
+df.2 <- FindClusters(df.2, resolution = 1.4)
+df.2 <- FindClusters(df.2, resolution = 1.6)
+```
+
+Look at the plots
+
+```{r}
+DimPlot(df.2, reduction = "umap", group.by = "assayID_snn_res.0") + ggtitle("res = 0")
+DimPlot(df.2, reduction = "umap", group.by = "assayID_snn_res.0.1") + ggtitle("res = 0.1")
+DimPlot(df.2, reduction = "umap", group.by = "assayID_snn_res.0.2") + ggtitle("res = 0.2")
+DimPlot(df.2, reduction = "umap", group.by = "assayID_snn_res.0.3") + ggtitle("res = 0.3")
+DimPlot(df.2, reduction = "umap", group.by = "assayID_snn_res.0.4") + ggtitle("res = 0.4")
+DimPlot(df.2, reduction = "umap", group.by = "assayID_snn_res.0.6") + ggtitle("res = 0.6")
+DimPlot(df.2, reduction = "umap", group.by = "assayID_snn_res.0.8") + ggtitle("res = 0.8")
+DimPlot(df.2, reduction = "umap", group.by = "assayID_snn_res.1") + ggtitle("res = 1")
+DimPlot(df.2, reduction = "umap", group.by = "assayID_snn_res.1.2") + ggtitle("res = 1.2")
+DimPlot(df.2, reduction = "umap", group.by = "assayID_snn_res.1.4") + ggtitle("res = 1.4")
+DimPlot(df.2, reduction = "umap", group.by = "assayID_snn_res.1.6") + ggtitle("res = 1.6")
+```
+
+```{r fig.width=12}
+SpatialDimPlot(df.2, group.by = "assayID_snn_res.0") + ggtitle("res = 0")
+SpatialDimPlot(df.2, group.by = "assayID_snn_res.0.1",) + ggtitle("res = 0.1")
+SpatialDimPlot(df.2, group.by = "assayID_snn_res.0.2",) + ggtitle("res = 0.2")
+SpatialDimPlot(df.2, group.by = "assayID_snn_res.0.3",) + ggtitle("res = 0.3")
+SpatialDimPlot(df.2, group.by = "assayID_snn_res.0.4") + ggtitle("res = 0.4")
+SpatialDimPlot(df.2, group.by = "assayID_snn_res.0.6") + ggtitle("res = 0.6")
+SpatialDimPlot(df.2, group.by = "assayID_snn_res.0.8") + ggtitle("res = 0.8")
+SpatialDimPlot(df.2, group.by = "assayID_snn_res.1") + ggtitle("res = 1")
+SpatialDimPlot(df.2, group.by = "assayID_snn_res.1.2") + ggtitle("res = 1.2")
+SpatialDimPlot(df.2, group.by = "assayID_snn_res.1") + ggtitle("res = 1.4")
+SpatialDimPlot(df.2, group.by = "assayID_snn_res.1.2") + ggtitle("res = 1.6")
+```
+
+Now we want to choose a resolution value. One method to do this uses the R package Clustree. This is the [R package description](https://cran.r-project.org/web/packages/clustree/index.html): "Deciding what resolution to use can be a difficult question when approaching a clustering analysis. One way to approach this problem is to look at how samples move as the number of clusters increases. This package allows you to produce clustering trees, a visualisation for interrogating clusterings as resolution increases." It will generate a tree diagram showing how the different clusterings are inter-related. The clusters in this diagram will be coloured different shades of blue, representing "sc3 stability". This is a "Stability index [that] shows how stable each cluster is accross the selected range of k. The stability index varies between 0 and 1, where 1 means that the same cluster appears in every solution for different k"
+
+```{r}
+clust <- clustree(df.2, prefix = "assayID_snn_res.", node_colour = "sc3_stability", edge_width = 1, node_text_colour = "white", node_label_size = 4, layout = "tree", edge_arrow = FALSE)
+clust
+ggsave(plot = clust, file = paste0(outdir, sampleID, "_clustree.pdf"), width = 10, height = 10)
+# extract the stability values for the different resolutions
+stability <- clust$data[,c("assayID_snn_res.", "sc3_stability")]
+write.table(stability, file = paste0(outdir, "clustree_stability.txt"), sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+```
+
+```{r}
+# here we're going to work out which of the possible clustering resolutions is the most stable (i.e. gives the highest average sc3 stability score). 
+stability <- stability[stability$assayID_snn_res. %in% names(which(table(stability$assayID_snn_res.) > 1)), ]
+stability.ave <- aggregate(as.numeric(stability$sc3_stability), list(stability$assayID_snn_res.), mean)
+rownames(stability.ave) <- stability.ave$Group.1
+stability.ave$Group.1 <- NULL
+stability.ave.no0 <- stability.ave[2:nrow(stability.ave), , drop = FALSE]
+bestres <- as.numeric(rownames(stability.ave.no0)[which.max(stability.ave.no0$x)])
+stability.ave
+bestres
+```
+
+The value printed above is the resolution parameter that produced the highest average stability.
+
+```{r}
+rm(df.2)
+df <- FindClusters(df, resolution = bestres)
+mycol <- paste0("assayID_snn_res.", bestres)
+DimPlot(df, group.by = mycol)
+ggsave(paste0(outdir, sampleID, "UMAP_res", bestres, ".pdf"))
+
+SpatialDimPlot(df, group.by = mycol)
+ggsave(paste0(outdir, sampleID, "spatial_res", bestres, ".pdf"))
+```
+
+# FIND MARKER GENES ASSOCIATED WITH EACH CLUSTER
+
+```{r}
+mycol <- paste0("assayID_snn_res.", bestres)
+Idents(df) <- mycol
+markers <- FindAllMarkers(df, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+top10 <- markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_logFC)
+write.table(markers, file = paste0(outdir, "allmarkers.txt"), sep = "\t", quote = FALSE, col.names = NA)
+write.table(top10, file = paste0(outdir, "top10markers.txt"), sep = "\t", quote = FALSE, col.names = NA)
+```
+
+```{r}
+DoHeatmap(df, features = top10$gene) + NoLegend()
+ggsave(paste0(outdir, "top10_heatmap.pdf"))
+```
+
+# FIND THE NUMBER OF CELLS PER CLUSTER
+
+```{r}
+table <- as.data.frame(table(df[[mycol]]))
+ggplot(table, aes(x = Var1, y = Freq)) +
+  geom_bar(stat = "identity") +
+  coord_flip()
+ggsave(file = paste0(outdir, "clustercounts.pdf"))
+
+rownames(table) <- table$Var1
+table$Var1 <- NULL
+write.table(table, file = paste0(outdir, "clustercounts.txt"), sep = "\t", quote = FALSE, col.names = NA)
+```
+
+# SAVE THE OUTPUT
+
+```{r}
+saveRDS(df, file = paste0(outdir, sampleID, "_DF_annotated.RDS"))
+```
+
+
