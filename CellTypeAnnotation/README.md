@@ -9,4 +9,4 @@ knitr::purl("/path/to/SeuratSpatialAnalysisPipeline.Rmd")
 # will save a file /path/to/SeuratSpatialAnalysisPipeline.R
 ```
 
-Users wishing to run the cell cycle prediction step will need to download the `mouse.cc.genes.Rdata` file and update the path to the `load("/path/to/mouse.cc.genes.Rdata")` line. 
+Users wishing to run the cell cycle prediction step will need to download the `mouse.cc.genes.Rdata` file and update the path in the `load("/path/to/mouse.cc.genes.Rdata")` line. 
