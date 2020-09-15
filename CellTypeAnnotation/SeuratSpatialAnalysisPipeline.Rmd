@@ -134,7 +134,7 @@ func_predictCellCycle <- function(seuratObj, myspecies="mouse"){
   
   # specify the gene set used for Cell Cycle Scoring (human or mouse)
   if (identical(myspecies, "mouse")) {
-    load("/Users/uqlgrice/Documents/IMB/Research/LabBooks/20200106_BuildPipe/data/mouse.cc.genes.Rdata")
+    load("/path/to/mouse.cc.genes.Rdata")
     geneset <- mouse.cc.genes
   } else if (identical(myspecies, "human")) {
     geneset <- cc.genes.updated.2019
