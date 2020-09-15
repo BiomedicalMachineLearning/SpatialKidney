@@ -10,3 +10,12 @@ knitr::purl("/path/to/SeuratSpatialAnalysisPipeline.Rmd")
 ```
 
 Users wishing to run the cell cycle prediction step will need to download the `mouse.cc.genes.Rdata` file and update the path in the `load("/path/to/mouse.cc.genes.Rdata")` line. 
+
+## SeuratSpatialAnalysisPipeline.Rmd
+
+This R notebook will perform label transfer to annotate a query dataset with annotations from a reference dataset. The user must edit the first code chunk to provide the path to the query and reference RDS files (must be Seurat objects). This R notebook can be converted to an R script by calling:
+
+```
+knitr::purl("/path/to/SeuratSpatialAnalysisPipeline.Rmd")
+# will save a file /path/to/SeuratSpatialAnalysisPipeline.R
+```
