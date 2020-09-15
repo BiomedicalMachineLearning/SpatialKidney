@@ -1,0 +1,102 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+```
+
+```{r}
+sampleID <- "assayID"
+outdir <- "/path/to/outdir/"
+lake <- readRDS("/path/to/assayID.vs.lake_labelTransferResults.RDS")
+liao <- readRDS("/path/to/assayID.vs.lake_labelTransferResults.RDS")
+```
+
+```{r}
+lakehits <- lake[[c("lake_abbrev_predicted.id", "lake_abbrev_prediction.score.max")]]
+liaohits <- liao[[c("liao_abbrev_predicted.id", "liao_abbrev_prediction.score.max")]]
+allhits <- cbind(lakehits, liaohits)
+```
+
+```{r}
+# how many rows
+print(paste0("there are ", nrow(allhits), " spots"))
+# which rows have high lake, high liao?
+length(which(allhits$lake_abbrev_prediction.score.max > 0.6 & allhits$liao_abbrev_prediction.score.max > 0.6))
+allhits_allhigh <- allhits[which(allhits$lake_abbrev_prediction.score.max > 0.6 & allhits$liao_abbrev_prediction.score.max > 0.6),]
+print("are the high-in-both hits the same?")
+summary(allhits_allhigh$lake_abbrev_predicted.id == allhits_allhigh$liao_abbrev_predicted.id) #are they the same
+# which rows have high lake, low liao?
+length(which(allhits$lake_abbrev_prediction.score.max > 0.6 & allhits$liao_abbrev_prediction.score.max < 0.6))
+# which rows have low lake, high liao?
+length(which(allhits$lake_abbrev_prediction.score.max < 0.6 & allhits$liao_abbrev_prediction.score.max > 0.6))
+# which rows have low lake, low liao?
+length(which(allhits$lake_abbrev_prediction.score.max < 0.6 & allhits$liao_abbrev_prediction.score.max < 0.6))
+```
+
+```{r}
+# give high-quality lake calls the lake call, otherwise give high-quality liao calls
+allhits$lakeliao <- ifelse(allhits$liao_abbrev_prediction.score.max < 0.6, "unknown", allhits$liao_abbrev_predicted.id) 
+allhits$lakeliao <- ifelse(allhits$lake_abbrev_prediction.score.max > 0.6, allhits$lake_abbrev_predicted.id, allhits$lakeliao)
+
+# which call used?
+allhits$whichcall <- ifelse(allhits$liao_abbrev_prediction.score.max < 0.6, "unknown", "liao") 
+allhits$whichcall <- ifelse(allhits$lake_abbrev_prediction.score.max > 0.6, "lake", allhits$whichcall)
+
+# overall score
+allhits$lakeliao.maxscore <- ifelse(allhits$liao_abbrev_prediction.score.max < 0.6, "unknown", allhits$liao_abbrev_prediction.score.max)
+allhits$lakeliao.maxscore <- ifelse(allhits$lake_abbrev_prediction.score.max > 0.6, allhits$lake_abbrev_prediction.score.max, allhits$lakeliao.maxscore)
+```
+
+```{r}
+# add everything to Lake
+allhits2 <- allhits[,c("liao_abbrev_predicted.id", "liao_abbrev_prediction.score.max", "lakeliao", "whichcall", "lakeliao.maxscore")]
+lake <- AddMetaData(lake, allhits2)
+lake$lakeliao <- ifelse(lake$lakeliao == "unknown", NA, lake$lakeliao) 
+lake$lakeliao.maxscore <- ifelse(lake$lakeliao.maxscore == "unknown", NA, lake$lakeliao.maxscore) 
+lake$lakeliao.maxscore <- as.numeric(lake$lakeliao.maxscore)
+```
+
+# Visualisation
+
+```{r}
+# plot showing distribution of prediction scores (scores below 0.6 are omitted)
+SpatialFeaturePlot(lake, features = "lakeliao.maxscore")
+ggsave(file = paste0(outdir, sampleID, "_lakeliaocombo_SpatialPredictionScores.pdf"))
+```
+
+```{r}
+# plot showing cell type calls
+SpatialDimPlot(lake, group.by = "lakeliao")
+ggsave(file = paste0(outdir, sampleID, "_lakeliaocombo_SpatialDimPlot.pdf"))
+```
+
+# annotation counts
+
+```{r}
+myannotation <- as.data.frame(table(lake[["lakeliao"]]))
+ggplot(myannotation, aes(x = Var1, y = Freq)) +
+  geom_bar(stat = "identity") +
+  coord_flip()
+ggsave(file = paste0(outdir, sampleID, "_lakeliaocombo_counts.pdf"))
+```
+
+# Marker genes for transferred labels (high score)
+
+```{r}
+Idents(lake) <- "lakeliao"
+markers <- FindAllMarkers(lake, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+top10 <- markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_logFC)
+write.table(markers, file = paste0(outdir, sampleID, "_lakeliaocombo_allmarkers.txt"), sep = "\t", quote = FALSE, col.names = NA)
+write.table(top10, file = paste0(outdir, sampleID, "_lakeliaocombo_top10markers.txt"), sep = "\t", quote = FALSE, col.names = NA)
+```
+
+
+```{r}
+saveRDS(lake, file = paste0(outdir, "lakeliaomerge.RDS"))
+```
+
