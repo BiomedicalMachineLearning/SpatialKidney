@@ -1,0 +1,111 @@
+---
+title: "label transfer"
+output: html_notebook
+---
+
+# Set some user parameters
+
+```{r}
+sampleID <- "assayID"
+outdir <- "/path/to/outdir/"
+df <- readRDS("/path/to/your.RDS") #the RDS output of SeuratSpatialAnalysisPipeline.Rmd
+refID <- "refID" #used to save your files - e.g. Lake or Liao
+ref <- readRDS("/path/to/reference.RDS") #pre-processed Seurat object of reference data, e.g. Lake or Liao
+
+#Note: this code assumes the metadata of interest you are "transferring" is in a column called "annotation_simple". If this is not the case, cntl+f for "annotation_simple" and change to the column name you wish to use for annotation
+```
+
+# load the data
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+```
+
+# Run label transfer. 
+
+We're going to match up our query data (Visium) with the reference data and make connections/"anchors" between cells that can be considered to be the same type. Then we can use the annotation of each reference cell to annotate the corresponding query cell/s. 
+
+The query dataset can ONLY be given annotations that exist in the reference set, and will be given a label even if there are no "true" hits. For example, if you annotate a kidney dataset with a neuronal reference, every cell will still get a label. However, we expect that the probability scores associated with each annotation will be low.
+
+Therefore, rather than accept all the labels we are given, we also add an additional filtering step where any annotation with a prediction score less than 0.6 (60%) is relabeled as "unknown".
+
+```{r}
+anchors <- FindTransferAnchors(reference = ref, query = df, project.query = T)
+predictions <- TransferData(anchorset = anchors, refdata = ref$annotation_simple)
+
+predictions_sml <- predictions[,c("predicted.id", "prediction.score.max")]
+colnames(predictions_sml)[colnames(predictions_sml)=="predicted.id"] <- paste0(refID, "_abbrev_predicted.id")
+colnames(predictions_sml)[colnames(predictions_sml)=="prediction.score.max"] <- paste0(refID, "_abbrev_prediction.score.max")
+df <- AddMetaData(df, metadata = predictions_sml)
+# and now rename the annotations with scores that are too low
+predictions_sml <- predictions[,c("predicted.id", "prediction.score.max")]
+predictions_sml$predicted.id <- ifelse(predictions_sml$prediction.score.max < 0.6, NA, predictions_sml$predicted.id)
+predictions_sml <- predictions_sml[,1, drop = FALSE]
+colnames(predictions_sml)[colnames(predictions_sml)=="predicted.id"] <- paste0(refID, "_abbrev_predicted.id_hiscore")
+# apply metadata
+df <- AddMetaData(df, metadata = predictions_sml)
+write.table(predictions_sml, file = paste0(outdir, sampleID, ".vs.", refID, "_labelTransferMetadata.txt"))
+saveRDS(df, file = paste0(outdir, sampleID, ".vs.", refID, "_labelTransferResults.RDS"))
+```
+
+```{r}
+# plot showing distribution of prediction scores
+SpatialFeaturePlot(df, features = paste0(refID, "_abbrev_prediction.score.max"), alpha = c(0.5, 1))
+ggsave(file = paste0(outdir, sampleID, ".vs.", refID, "_labelTransfer_SpatialPredictionScores.pdf"))
+```
+
+
+```{r fig.height=12, fig.width=12}
+# run for all labels, regardless of score
+DimPlot(df, group.by = paste0(refID, "_abbrev_predicted.id"), pt.size = 1)
+ggsave(file = paste0(outdir, sampleID, ".vs.", refID, "_labelTransfer_AllAnnotations_DimPlot.pdf"))
+
+
+SpatialDimPlot(df, group.by = paste0(refID, "_abbrev_predicted.id"))
+ggsave(file = paste0(outdir, sampleID, ".vs.", refID, "_labelTransfer_AllAnnotations_SpatialPlot.pdf"))
+
+# run for all labels with >60% confidence
+DimPlot(df, group.by = paste0(refID, "_abbrev_predicted.id_hiscore"), pt.size = 1)
+ggsave(file = paste0(outdir, sampleID, ".vs.", refID, "_labelTransfer_HiScoreAnnotations_DimPlot.pdf"))
+SpatialDimPlot(df, group.by = paste0(refID, "_abbrev_predicted.id_hiscore"))
+ggsave(file = paste0(outdir, sampleID, ".vs.", refID,  "_labelTransfer_HiScoreAnnotations_SpatialPlot.pdf"))
+```
+
+# annotation counts
+
+```{r}
+table_hi <- as.data.frame(table(df[[paste0(refID, "_abbrev_predicted.id_hiscore")]]))
+ggplot(table_hi, aes(x = Var1, y = Freq)) +
+  geom_bar(stat = "identity") +
+  coord_flip()
+ggsave(file = paste0(outdir, sampleID, ".vs.", refID, "_abbrev_hiscore_counts.pdf"))
+
+table_all <- as.data.frame(table(df[[paste0(refID, "_abbrev_predicted.id")]]))
+ggplot(table_all, aes(x = Var1, y = Freq)) +
+  geom_bar(stat = "identity") +
+  coord_flip()
+ggsave(file = paste0(outdir, sampleID, ".vs.", refID, "_abbrev_allscores_counts.pdf"))
+```
+
+# Marker genes for transferred labels (high score)
+
+```{r}
+Idents(df) <- paste0(refID, "_abbrev_predicted.id_hiscore")
+hiscoremarkers <- FindAllMarkers(df, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+hitop10 <- hiscoremarkers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_logFC)
+write.table(hiscoremarkers, file = paste0(outdir, sampleID, ".vs.", refID, "_allmarkers_highscore.txt"), sep = "\t", quote = FALSE, col.names = NA)
+write.table(hitop10, file = paste0(outdir, sampleID, ".vs.", refID, "_top10markers_highscore.txt"), sep = "\t", quote = FALSE, col.names = NA)
+```
+
+# Marker genes for clusters (all hits)
+
+```{r}
+Idents(df) <- paste0(refID, "_abbrev_predicted.id")
+allmarkers <- FindAllMarkers(df, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+alltop10 <- allmarkers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_logFC)
+write.table(allmarkers, file = paste0(outdir, sampleID, ".vs.", refID, "_allmarkers_anyscore.txt"), sep = "\t", quote = FALSE, col.names = NA)
+write.table(alltop10, file = paste0(outdir, sampleID, ".vs.", refID, "_top10markers_anyscore.txt"), sep = "\t", quote = FALSE, col.names = NA)
+```
+
