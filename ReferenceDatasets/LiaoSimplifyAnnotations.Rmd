@@ -1,0 +1,57 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Goal: to simplify the annotations in Lake and Liao, and perform label transfer again.
+
+The desired names to change, and what they should be changed to, are here:
+/path/to/kidney/Lake_Liao_simplify_annotations.xlsx
+
+```{r}
+library(Seurat)
+```
+
+```{r}
+outdir <- "/path/to/kidney/Liao2020/GSE131685/simplify_annotations/out/"
+```
+
+
+```{r}
+df <- readRDS("/path/to/kidney/Liao2020/GSE131685/rerun_script/LiaoKidneyProcessed.RDS")
+```
+
+# First we remove terms we don't want
+
+There are none to exclude from Liao
+
+# Now we alter the terms we want to keep
+
+```{r}
+templabels <- df[["annotation"]]
+## now we do gsub to modify them
+templabels$annotation <- gsub("Collecting duct intercalated cells", "Collecting_Duct", templabels$annotation, fixed = TRUE)
+templabels$annotation <- gsub("Collecting duct principal cells", "Collecting_Duct", templabels$annotation, fixed = TRUE)
+templabels$annotation <- gsub("Distal tubule cells", "Distal_Convoluted_Tubule", templabels$annotation, fixed = TRUE)
+templabels$annotation <- gsub("Glomerular parietal epithelial cells", "Glomeruli", templabels$annotation, fixed = TRUE)
+templabels$annotation <- gsub("Monocytes", "Immune_cells", templabels$annotation, fixed = TRUE)
+templabels$annotation <- gsub("NK-T cells", "Immune_cells", templabels$annotation, fixed = TRUE)
+templabels$annotation <- gsub("B cells", "Immune_cells", templabels$annotation, fixed = TRUE)
+templabels$annotation <- gsub("Proximal tubule-related", "Proximal_Tubule", templabels$annotation, fixed = TRUE)
+templabels$annotation <- gsub("Proximal straight tubule cells", "Proximal_Tubule", templabels$annotation, fixed = TRUE)
+```
+
+```{r}
+df[["annotation_simple"]] <- templabels$annotation
+```
+
+# Don't need to rescale because I didn't subset
+
+```{r}
+DimPlot(df, reduction = "umap", group.by = "annotation_simple")
+```
+
+```{r}
+saveRDS(df, file = paste0(outdir, "LiaoKidneyProcessed_simple.RDS"))
+```
+

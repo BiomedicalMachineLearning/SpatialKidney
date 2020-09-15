@@ -1,0 +1,144 @@
+---
+title: "Liao et al."
+output: html_notebook
+---
+
+Code adapted from https://github.com/lessonskit/Single-cell-RNA-sequencing-of-human-kidney
+
+```{r}
+workdir <- "/path/to/kidney/Liao2020/GSE131685/rerun_script/"
+
+#####Kidney data loading, QC and cell classification by Seurat V3.1
+library(Seurat)
+library(magrittr)
+library(cowplot)
+library(harmony)
+library(dplyr)
+library(ggplot2)
+#library(scran)
+#library(batchelor)
+```
+
+```{r}
+K1.data <- Read10X(data.dir = "/path/to/kidney/Liao2020/GSE131685/GSE131685_RAW/GSM4145204_kidney1")
+K1 <- CreateSeuratObject(counts = K1.data, project = "kidney1", min.cells = 8, min.features = 200)
+K2.data <- Read10X(data.dir = "/path/to/kidney/Liao2020/GSE131685/GSE131685_RAW/GSM4145205_kidney2")
+K2 <- CreateSeuratObject(counts = K2.data, project = "kidney2", min.cells = 6, min.features = 200)
+K3.data <- Read10X(data.dir = "/path/to/kidney/Liao2020/GSE131685/GSE131685_RAW/GSM4145206_kidney3")
+K3 <- CreateSeuratObject(counts = K3.data, project = "kidney3", min.cells = 10, min.features = 200)
+kid <- merge(x = K1, y = list(K2, K3))
+```
+
+```{r}
+kid[["percent.mt"]] <- PercentageFeatureSet(kid, pattern = "^MT-")
+VlnPlot(kid, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+plot1 <- FeatureScatter(kid, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(kid, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+CombinePlots(plots = list(plot1, plot2))
+kid <- subset(kid, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 30)
+kid <- NormalizeData(kid, normalization.method = "LogNormalize", scale.factor = 10000)
+kid <- NormalizeData(kid)
+kid <- FindVariableFeatures(kid, selection.method = "vst", nfeatures = 2000)
+top10 <- head(VariableFeatures(kid), 10)
+plot1 <- VariableFeaturePlot(kid)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+CombinePlots(plots = list(plot1, plot2))
+```
+
+```{r}
+s.genes <-cc.genes$s.genes
+g2m.genes<-cc.genes$g2m.genes
+kid <- CellCycleScoring(kid, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+all.genes <- rownames(kid)
+kid <- ScaleData(kid, vars.to.regress = c("S.Score", "G2M.Score"), features = all.genes)
+```
+
+```{r}
+###Eliminate batch effects with harmony and cell classification
+kid <- RunPCA(kid, pc.genes = kid@var.genes, npcs = 20, verbose = FALSE)
+options(repr.plot.height = 2.5, repr.plot.width = 6)
+kid <- kid %>% 
+    RunHarmony("orig.ident", plot_convergence = TRUE)
+harmony_embeddings <- Embeddings(kid, 'harmony')
+harmony_embeddings[1:5, 1:5]
+kid <- kid %>% 
+    RunUMAP(reduction = "harmony", dims = 1:20) %>% 
+    FindNeighbors(reduction = "harmony", dims = 1:20) %>% 
+    FindClusters(resolution = 0.25) %>% 
+    identity()
+new.cluster.ids <- c(0,1, 2, 3, 4, 5, 6, 7,8,9,10)
+names(new.cluster.ids) <- levels(kid)
+kid <- RenameIdents(kid, new.cluster.ids)
+```
+
+```{r}
+##Calculating differentially expressed genes (DEGs) and Save rds file
+kid.markers <- FindAllMarkers(kid, only.pos = TRUE, min.pct = 0.25, thresh.use = 0.25)
+write.table(kid.markers,sep="\t",file=paste0(workdir, "0.2_20.xls"))
+saveRDS(kid,file=paste0(workdir, "0.25_20.rds"))
+```
+
+```{r}
+kid <- readRDS(paste0(workdir, "0.25_20.rds"))
+```
+
+Add some bits
+```{r}
+DoHeatmap(kid, features = c("SLC13A3","SLC34A1","GPX3","DCXR","SLC17A3","SLC22A8","SLC22A7","GNLY","NKG7","CD3D","CD3E","LYZ","CD14","KRT8","KRT18","CD24","VCAM1","UMOD","DEFB1","CLDN8","AQP2","CD79A","CD79B","ATP6V1G3","ATP6V0D2","TMEM213"))
+ggsave(paste0(workdir, "heatmap.pdf"))
+```
+
+```{r fig.width=12}
+VlnPlot(kid, pt.size =0, features = c("GPX3", "DCXR","SLC13A3","SLC34A1","SLC22A8","SLC22A7")) #in the original code they ran clusters 1,2,3
+VlnPlot(kid,  features = c("AQP2", "ATP6V1B1","ATP6V0D2","ATP6V1G3")) #in the original code they ran clusters 8,10
+# from plot 2, i believe that my clusters 8 and 10 are equivalent to theirs
+VlnPlot(kid,  features = c("CD3D", "CD3E","GNLY","NKG7", "IL7R")) # This sort of looks like my cluster 4 is BOTH NKT and T cells? which doesn't maek sense from their data
+VlnPlot(kid,  features = c("GPX3", "DCXR","SLC13A3","SLC34A1", "SLC22A7")) # they were looking at pseudotime cells here
+```
+
+I have 11 clusters. They have 10. We both have 23366 cells. From their Figure 1C, they give the percentage breakdowns of the clusters/cell types - so I can calculate roughly the number of cells in each cluster, and compare them with mine:
+
+```{r}
+# their cluster counts:
+clust <- read.delim(file = "/path/to/kidney/Liao2020/GSE131685/rerun_script/calculations_of_cluster_conversion/LiaoFig1C")
+head(clust, n = 11)
+```
+
+```{r}
+# my cluster counts
+as.data.frame(table(kid[["RNA_snn_res.0.25"]][,1]))
+```
+
+So I can look at the two tables and work out which clusters must be the same:
+
+```{r}
+# cluster conversion
+clustconv <- read.delim(file = "/path/to/kidney/Liao2020/GSE131685/rerun_script/calculations_of_cluster_conversion/cluster_conversion")
+clustconv
+```
+
+I can match all my clusters to theirs except for my cluster 0/1/2. But this only leaves two proximal tubule-related ones, so I can just make these some generic term.
+
+```{r}
+##Some visual figure generation
+DimPlot(kid, reduction = "umap", group.by = "orig.ident", pt.size = .1, split.by = 'orig.ident')
+DimPlot(kid, reduction = "umap", group.by = "Phase", pt.size = .1)
+DimPlot(kid, reduction = "umap", label = TRUE, pt.size = .1)
+DoHeatmap(kid, features = c("SLC13A3","SLC34A1","GPX3","DCXR","SLC17A3","SLC22A8","SLC22A7","GNLY","NKG7","CD3D","CD3E","LYZ","CD14","KRT8","KRT18","CD24","VCAM1","UMOD","DEFB1","CLDN8","AQP2","CD79A","CD79B","ATP6V1G3","ATP6V0D2","TMEM213"))
+VlnPlot(kid, pt.size =0, idents= c(1,2,3), features = c("GPX3", "DCXR","SLC13A3","SLC34A1","SLC22A8","SLC22A7"))
+VlnPlot(kid, idents= c(8,10), features = c("AQP2", "ATP6V1B1","ATP6V0D2","ATP6V1G3"))
+```
+
+```{r}
+##tSNE Plot
+kid <-RunTSNE(kid, reduction = "harmony", dims = 1:20)
+```
+
+```{r}
+TSNEPlot(kid, label = TRUE, pt.size = 0.3)
+ggsave(paste0(workdir, "kidney_tsne.pdf"))
+TSNEPlot(kid, group.by = "orig.ident", split.by = 'orig.ident', pt.size = 0.3)
+ggsave(paste0(workdir, "kidney_tsne_split.pdf"))
+TSNEPlot(kid, group.by = "Phase", pt.size = 0.3)
+ggsave(paste0(workdir, "kidney_tsne_phase.pdf"))
+```
