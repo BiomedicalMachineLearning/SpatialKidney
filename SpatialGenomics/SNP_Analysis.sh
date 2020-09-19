@@ -1,20 +1,25 @@
 #################
 #This script has the workflow for formating and processing SNP from Visium data and those from GWAS Catalog database found associated with Kidney diseases 
 #################
-cd /30days/uqhnguy8/Visium/Visium5
 
-#Format kidney disease files to a bed file  
+#download GWAS SNP catalog to get Kidney_disease_ralated_SNPs.txt, then process to get the bed format 
+library(data.table)
+dat <-fread("Kidney_disease_ralated_SNPs.txt")
+colnames(dat)
+dat_short <-dat[,c(12:13,22,14)]
+head(dat_short)
+write.table(dat_short, "Kidney_disease_ralated_SNPs_bed4.txt", sep="\t", col.names=F, row.names=F, quote=F)
+
+#format kidney disease files to a bed file, add "chr"  
 
 awk '{FS="\t"}{OFS="\t"}{print "chr"$1, $2, $2+1, $3, $4"."}' Kidney_disease_ralated_SNPs_bed4.bed >Kidney_disease_ralated_SNPs_bed4_V2.bed
 
-awk '{print $4}' Kidney_disease_ralated_SNPs_chr_withNA.bed| sed 's/:/ /' | awk '{OFS="\t"}{print $1, $2, $2+1, ".", "."}' >Kidney_disease_ralated_SNPs_chr_withNA_v2.bed 
-
 grep -v chrNA Kidney_disease_ralated_SNPs_bed4_V2.bed >Kidney_disease_ralated_SNPs_bed4_V2_noNA.bed #remove chrNA 
 
-sed 's/,\ /\_/g' Kidney_disease_ralated_SNPs_bed4_V2_noNA.bed >Kidney_disease_ralated_SNPs_bed4_V2_noNA_v2.bed
+sed 's/,\ /\_/g' Kidney_disease_ralated_SNPs_bed4_V2_noNA.bed >Kidney_disease_ralated_SNPs_bed4_V2_noNA_v2.bed #replace ","
 
+#sort by chr  
 bedtools sort -i Kidney_disease_ralated_SNPs_bed4_V2_noNA_v2.bed >Kidney_disease_ralated_SNPs_bed4_V2_noNA_v2_sorted.bed 
-
 
 #format vcf file 
 grep -v "#" FreeBayes_Vis5_A.vcf | awk '{OFS="\t"}{print $1, $2, $2+1, $4, $5, $6}' >FreeBayes_Vis5_A_bed5.vcf
