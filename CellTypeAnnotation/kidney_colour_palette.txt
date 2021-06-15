@@ -5,7 +5,7 @@ Immune_cells	forestgreen	#228B22
 Interstitium	violetred	#D02090
 Loop_of_Henle	peru	#CD853F
 Proximal_tubule	deepskyblue	#00BFFF
-Vessels	red2	#EE0000
+Vessels	darkred	#8B0000
 NA	gray75	#BFBFBF
 No_call	gray85	#D9D9D9
 endothelial	yellow	#FFFF00
