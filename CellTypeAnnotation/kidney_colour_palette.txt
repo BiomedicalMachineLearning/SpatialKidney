@@ -1,0 +1,16 @@
+Collecting_duct	firebrick1	#FF3030
+Distal_convoluted_tubule	chocolate1	#FF7F24
+Glomeruli	yellowgreen	#9ACD32
+Immune_cells	forestgreen	#228B22
+Interstitium	violetred	#D02090
+Loop_of_Henle	peru	#CD853F
+Proximal_tubule	deepskyblue	#00BFFF
+Vessels	red2	#EE0000
+NA	gray75	#BFBFBF
+No_call	gray85	#D9D9D9
+endothelial	yellow	#FFFF00
+fibroblast	dodgerblue4	#104E8B
+nephron_progenitor	darkorchid	#9932CC
+stroma	plum2	#EEAEEE
+proliferating	sienna4	#8B4726
+unknown	gray50	#7F7F7F
