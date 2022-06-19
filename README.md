@@ -12,7 +12,7 @@
 
 ## Datasets:
 
-- Link 1 human kidney  -> https://cloud.rdm.uq.edu.au/index.php/s/rqnfW4a5NdxqyKW -> password: Visium2B
-- Link 2  human kidney  -> https://cloud.rdm.uq.edu.au/index.php/s/DxPY9sxTR27yXLQ -> password: Visium5ABC
-- Link 3  human kidney  -> https://cloud.rdm.uq.edu.au/index.php/s/m3Dgj29QetZpLmJ -> password: Visium5D  (human kidney)
-- Link 4  Legacy LP3 (mouse adult and human kidney -> https://cloudstor.aarnet.edu.au/plus/s/NkrQvVjsTtWvKiU -> no password
+- Link 1 human kidney  -> https://cloud.rdm.uq.edu.au/index.php/s/rqnfW4a5NdxqyKW -> password: contact us to get the password 
+- Link 2  human kidney  -> https://cloud.rdm.uq.edu.au/index.php/s/DxPY9sxTR27yXLQ -> password: contact us to get the password 
+- Link 3  human kidney  -> https://cloud.rdm.uq.edu.au/index.php/s/m3Dgj29QetZpLmJ -> password: contact us to get the password 
+- Link 4  Legacy LP3 (mouse adult and human kidney -> https://cloudstor.aarnet.edu.au/plus/s/NkrQvVjsTtWvKiU) -> no password
